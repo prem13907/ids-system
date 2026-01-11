@@ -3,5 +3,5 @@ numpy
 scikit-learn
 joblib
 scapy
-google-generativeai
+openai>=1.3.0
 
