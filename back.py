@@ -16,7 +16,7 @@ app = Flask(__name__)
 # ==============================
 # CONFIG
 # ==============================
-OPENAI_API_KEY = os.getenv("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")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")   # ✔ CORRECT
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Load ML model
@@ -90,12 +90,15 @@ def rule_based_detection(logs):
     ports = [l["port"] for l in logs if l.get("port")]
     src_ips = [l["src_ip"] for l in logs]
 
-    if len(set(ports)) >= 4:
+    # Port scanning (improved threshold)
+    if len(set(ports)) >= 30 and len(logs) >= 50:
         return True, "Port Scanning Detected"
 
+    # Brute-force SSH (port 22)
     if ports.count(22) > 6:
         return True, "Brute Force Attack Detected"
 
+    # DDoS (many logs from many IPs)
     if len(logs) > 25 and len(set(src_ips)) > 12:
         return True, "Possible DDoS Attack"
 
@@ -124,23 +127,22 @@ def openai_explain(logs, summary):
     try:
         prompt = f"""
         You are a cybersecurity expert.
-        Here are sample logs:
+        Logs:
         {json.dumps(logs[:10], indent=2)}
 
         Detection Summary: {summary}
-
-        Explain the attack clearly in simple terms.
+        Explain the attack clearly.
         """
 
         response = client.chat.completions.create(
-            model="o4-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a cybersecurity analyst."},
                 {"role": "user", "content": prompt}
             ]
         )
 
-        return response.choices[0].message["content"]
+        return response.choices[0].message.content
 
     except Exception as e:
         print("OpenAI Error:", e)
