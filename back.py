@@ -99,65 +99,59 @@ def parse_syslog(text):
 # RULE-BASED DETECTION WITH MULTIPLE ATTACKS + SEVERITY
 # =====================================================
 def rule_based_detection(logs):
-    ports = [l.get("port") for l in logs if l.get("port")]
-    src_ips = [l["src_ip"] for l in logs]
+    ports = [l.get("dst_port") for l in logs if l.get("dst_port")]
+    src_ips = [l.get("src_ip") for l in logs if l.get("src_ip")]
+    unique_ports = set(ports)
+    unique_ips = set(src_ips)
 
-    attacks = []
+    results = []
 
-    # --- Port Scanning ---
-    if len(set(ports)) >= 20 and len(logs) >= 40:
-        attacks.append({
-            "type": "Port Scanning",
+    # 1️⃣ PORT SCAN — very easy to trigger
+    if len(unique_ports) >= 10:
+        results.append({
+            "type": "Port Scan",
             "severity": "Medium",
             "timestamp": now(),
-            "details": f"{len(set(ports))} ports scanned"
+            "details": f"{len(unique_ports)} unique ports targeted"
         })
 
-    # --- SSH Brute Force (Port 22) ---
-    if ports.count(22) >= 8:
-        attacks.append({
+    # 2️⃣ SSH BRUTE FORCE (port 22)
+    if ports.count(22) >= 5:
+        results.append({
             "type": "SSH Brute Force",
             "severity": "High",
             "timestamp": now(),
-            "details": f"{ports.count(22)} repeated SSH attempts"
+            "details": f"{ports.count(22)} attempts to SSH"
         })
 
-    # --- RDP Brute Force (Port 3389) ---
-    if ports.count(3389) >= 8:
-        attacks.append({
+    # 3️⃣ RDP BRUTE FORCE (port 3389)
+    if ports.count(3389) >= 5:
+        results.append({
             "type": "RDP Brute Force",
             "severity": "High",
             "timestamp": now(),
-            "details": f"{ports.count(3389)} failed RDP attempts"
+            "details": f"{ports.count(3389)} attempts to RDP"
         })
 
-    # --- DoS Attack ---
-    if len(logs) >= 150:
-        attacks.append({
+    # 4️⃣ DOS ATTACK
+    if len(logs) >= 120:
+        results.append({
             "type": "DoS Attack",
             "severity": "High",
             "timestamp": now(),
-            "details": f"{len(logs)} requests in short time"
+            "details": f"{len(logs)} connections in short time"
         })
 
-    # --- DDoS Attack ---
-    if len(set(src_ips)) >= 10:
-        attacks.append({
+    # 5️⃣ DDOS (many unique IPs)
+    if len(unique_ips) >= 8:
+        results.append({
             "type": "DDoS Attack",
             "severity": "Critical",
             "timestamp": now(),
-            "details": f"Traffic from {len(set(src_ips))} unique IPs"
+            "details": f"Traffic from {len(unique_ips)} unique IPs"
         })
 
-    if not attacks:
-        attacks.append({
-            "type": "Normal Traffic",
-            "severity": "Low",
-            "timestamp": now(),
-            "details": "No attacks detected"
-        })
-
-    return attacks
+    return results
 
 # =====================================================
 # ML DETECTION
