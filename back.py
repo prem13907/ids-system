@@ -5,30 +5,34 @@ import joblib
 import re
 from scapy.all import rdpcap
 from scapy.layers.inet import IP, TCP, UDP
+import datetime
 import os
 from openai import OpenAI
 
-# ==============================
+# =====================================================
 # APP INIT
-# ==============================
+# =====================================================
 app = Flask(__name__)
 
-# ==============================
-# CONFIG
-# ==============================
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")   # ✔ CORRECT
+# =====================================================
+# OPENAI CONFIG
+# =====================================================
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Load ML model
+# =====================================================
+# LOAD ML MODEL
+# =====================================================
 try:
     ml_model = joblib.load("svm_model.pkl")
+    print("ML model loaded")
 except Exception as e:
-    print("ML model load error:", e)
+    print("ML model error:", e)
     ml_model = None
 
-# ==============================
-# AUTHORIZED CLIENTS
-# ==============================
+# =====================================================
+# CLIENT AUTH
+# =====================================================
 AUTHORIZED_CLIENTS = {
     "demo-client-001": "ABC123SECRETKEY",
     "college-client-002": "XYZ789SECRETKEY"
@@ -42,35 +46,43 @@ def verify_client():
         return False, "Missing API credentials"
 
     if cid not in AUTHORIZED_CLIENTS:
-        return False, "Invalid Client ID"
+        return False, "Invalid client ID"
 
     if AUTHORIZED_CLIENTS[cid] != key:
-        return False, "Invalid API Key"
+        return False, "Invalid API key"
 
     return True, cid
 
-# ==============================
-# LOG PARSERS
-# ==============================
+# =====================================================
+# TIME HELPER
+# =====================================================
+def now():
+    return datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+# =====================================================
+# PCAP PARSER
+# =====================================================
 def parse_pcap(file):
     packets = rdpcap(file)
     logs = []
-
     for pkt in packets:
         if IP in pkt:
-            entry = {
+            port = None
+            if TCP in pkt:
+                port = int(pkt[TCP].dport)
+            elif UDP in pkt:
+                port = int(pkt[UDP].dport)
+
+            logs.append({
                 "src_ip": pkt[IP].src,
                 "dst_ip": pkt[IP].dst,
-                "port": None
-            }
-            if TCP in pkt:
-                entry["port"] = int(pkt[TCP].dport)
-            elif UDP in pkt:
-                entry["port"] = int(pkt[UDP].dport)
-            logs.append(entry)
-
+                "port": port
+            })
     return logs
 
+# =====================================================
+# SYSLOG PARSER (KALI)
+# =====================================================
 def parse_syslog(text):
     logs = []
     for line in text.split("\n"):
@@ -83,47 +95,81 @@ def parse_syslog(text):
             })
     return logs
 
-# ==============================
-# RULE-BASED DETECTION
-# ==============================
+# =====================================================
+# RULE-BASED DETECTION WITH MULTIPLE ATTACKS + SEVERITY
+# =====================================================
 def rule_based_detection(logs):
-    ports = [l["port"] for l in logs if l.get("port")]
+    ports = [l.get("port") for l in logs if l.get("port")]
     src_ips = [l["src_ip"] for l in logs]
-    total = len(logs)
 
     attacks = []
 
-    # 1. PORT SCANNING
-    if len(set(ports)) >= 8:
-        attacks.append("Port Scanning Detected")
+    # --- Port Scanning ---
+    if len(set(ports)) >= 20 and len(logs) >= 40:
+        attacks.append({
+            "type": "Port Scanning",
+            "severity": "Medium",
+            "timestamp": now(),
+            "details": f"{len(set(ports))} ports scanned"
+        })
 
-    # 2. SSH BRUTE FORCE
+    # --- SSH Brute Force (Port 22) ---
     if ports.count(22) >= 8:
-        attacks.append("SSH Brute Force Attack Detected")
+        attacks.append({
+            "type": "SSH Brute Force",
+            "severity": "High",
+            "timestamp": now(),
+            "details": f"{ports.count(22)} repeated SSH attempts"
+        })
 
-    # 3. RDP BRUTE FORCE
+    # --- RDP Brute Force (Port 3389) ---
     if ports.count(3389) >= 8:
-        attacks.append("RDP Brute Force Attack Detected")
+        attacks.append({
+            "type": "RDP Brute Force",
+            "severity": "High",
+            "timestamp": now(),
+            "details": f"{ports.count(3389)} failed RDP attempts"
+        })
 
-    # 4. DOS ATTACK
-    if total >= 30:
-        attacks.append("Possible DoS Attack")
+    # --- DoS Attack ---
+    if len(logs) >= 150:
+        attacks.append({
+            "type": "DoS Attack",
+            "severity": "High",
+            "timestamp": now(),
+            "details": f"{len(logs)} requests in short time"
+        })
 
-    # 5. MULTI-SOURCE DDOS
-    if len(set(src_ips)) >= 10 and total >= 20:
-        attacks.append("Possible DDoS Attack")
+    # --- DDoS Attack ---
+    if len(set(src_ips)) >= 10:
+        attacks.append({
+            "type": "DDoS Attack",
+            "severity": "Critical",
+            "timestamp": now(),
+            "details": f"Traffic from {len(set(src_ips))} unique IPs"
+        })
 
-    if attacks:
-        return True, attacks   # return list of attacks
-    else:
-        return False, ["Normal Traffic"]
+    if not attacks:
+        attacks.append({
+            "type": "Normal Traffic",
+            "severity": "Low",
+            "timestamp": now(),
+            "details": "No attacks detected"
+        })
 
-# ==============================
+    return attacks
+
+# =====================================================
 # ML DETECTION
-# ==============================
+# =====================================================
 def ml_detection(logs):
     if not ml_model:
-        return False, "ML model unavailable"
+        return {
+            "type": "ML Model",
+            "severity": "Low",
+            "timestamp": now(),
+            "details": "ML model unavailable"
+        }
 
     features = np.array([
         len(logs),
@@ -132,65 +178,68 @@ def ml_detection(logs):
     ]).reshape(1, -1)
 
     prediction = int(ml_model.predict(features)[0])
-    return (prediction == -1), "ML-based Anomaly Detection"
+    is_attack = (prediction == -1)
 
-# ==============================
+    return {
+        "type": "ML Anomaly Detection",
+        "severity": "Medium" if is_attack else "Low",
+        "timestamp": now(),
+        "details": "Anomalous traffic detected" if is_attack else "ML normal"
+    }
+
+# =====================================================
 # OPENAI EXPLANATION
-# ==============================
-def openai_explain(logs, summary):
+# =====================================================
+def openai_explain(logs, types):
     try:
         prompt = f"""
         You are a cybersecurity expert.
         Logs:
         {json.dumps(logs[:10], indent=2)}
 
-        Detection Summary: {summary}
-        Explain the attack clearly.
+        Detected attacks: {types}
+
+        Explain these attacks simply.
         """
 
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="o4-mini",
             messages=[
                 {"role": "system", "content": "You are a cybersecurity analyst."},
                 {"role": "user", "content": prompt}
             ]
         )
 
-        return response.choices[0].message.content
+        return response.choices[0].message["content"]
 
     except Exception as e:
-        print("OpenAI Error:", e)
+        print("OpenAI ERROR:", e)
         return "AI explanation unavailable."
 
-# ==============================
-# DETECTION PIPELINE
-# ==============================
+# =====================================================
+# PIPELINE
+# =====================================================
 def run_detection_pipeline(logs):
-    rule_hit, rule_msgs = rule_based_detection(logs)
-    ml_hit, ml_msg = ml_detection(logs)
+    attacks = rule_based_detection(logs)
 
-    attacks = []
+    ml_result = ml_detection(logs)
+    attacks.append(ml_result)
 
-    if rule_hit:
-        attacks.extend(rule_msgs)
+    print("\n===== ALERTS GENERATED =====")
+    for a in attacks:
+        print(a)
 
-    if ml_hit:
-        attacks.append(ml_msg)
-
-    detected = len(attacks) > 0
-
-    explanation = openai_explain(logs, ", ".join(attacks))
+    explanation = openai_explain(logs, ", ".join(a["type"] for a in attacks))
 
     return {
-        "detected": detected,
-        "summary": attacks,      # LIST of all attacks
+        "detected": any(a["type"] != "Normal Traffic" for a in attacks),
+        "attacks": attacks,
         "explanation": explanation
     }
 
-
-# ==============================
+# =====================================================
 # API ENDPOINT
-# ==============================
+# =====================================================
 @app.route("/analyze", methods=["POST"])
 def analyze_api():
     ok, cid = verify_client()
@@ -216,5 +265,9 @@ def analyze_api():
         "result": result
     })
 
+# =====================================================
+# RUN FLASK
+# =====================================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
