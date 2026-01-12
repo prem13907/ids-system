@@ -89,20 +89,34 @@ def parse_syslog(text):
 def rule_based_detection(logs):
     ports = [l["port"] for l in logs if l.get("port")]
     src_ips = [l["src_ip"] for l in logs]
+    total = len(logs)
 
-    # Port scanning (improved threshold)
-    if len(set(ports)) >= 30 and len(logs) >= 50:
-        return True, "Port Scanning Detected"
+    attacks = []
 
-    # Brute-force SSH (port 22)
-    if ports.count(22) > 6:
-        return True, "Brute Force Attack Detected"
+    # 1. PORT SCANNING
+    if len(set(ports)) >= 8:
+        attacks.append("Port Scanning Detected")
 
-    # DDoS (many logs from many IPs)
-    if len(logs) > 25 and len(set(src_ips)) > 12:
-        return True, "Possible DDoS Attack"
+    # 2. SSH BRUTE FORCE
+    if ports.count(22) >= 8:
+        attacks.append("SSH Brute Force Attack Detected")
 
-    return False, "Normal Traffic"
+    # 3. RDP BRUTE FORCE
+    if ports.count(3389) >= 8:
+        attacks.append("RDP Brute Force Attack Detected")
+
+    # 4. DOS ATTACK
+    if total >= 30:
+        attacks.append("Possible DoS Attack")
+
+    # 5. MULTI-SOURCE DDOS
+    if len(set(src_ips)) >= 10 and total >= 20:
+        attacks.append("Possible DDoS Attack")
+
+    if attacks:
+        return True, attacks   # return list of attacks
+    else:
+        return False, ["Normal Traffic"]
 
 # ==============================
 # ML DETECTION
@@ -152,17 +166,27 @@ def openai_explain(logs, summary):
 # DETECTION PIPELINE
 # ==============================
 def run_detection_pipeline(logs):
-    rule_hit, rule_msg = rule_based_detection(logs)
+    rule_hit, rule_msgs = rule_based_detection(logs)
     ml_hit, ml_msg = ml_detection(logs)
-    detected = rule_hit or ml_hit
-    summary = rule_msg if rule_hit else ml_msg
-    explanation = openai_explain(logs, summary)
+
+    attacks = []
+
+    if rule_hit:
+        attacks.extend(rule_msgs)
+
+    if ml_hit:
+        attacks.append(ml_msg)
+
+    detected = len(attacks) > 0
+
+    explanation = openai_explain(logs, ", ".join(attacks))
 
     return {
-        "detected": bool(detected),
-        "summary": summary,
+        "detected": detected,
+        "summary": attacks,      # LIST of all attacks
         "explanation": explanation
     }
+
 
 # ==============================
 # API ENDPOINT
