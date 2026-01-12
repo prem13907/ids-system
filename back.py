@@ -236,28 +236,45 @@ def run_detection_pipeline(logs):
 # =====================================================
 @app.route("/analyze", methods=["POST"])
 def analyze_api():
-    ok, cid = verify_client()
-    if not ok:
-        return jsonify({"error": cid}), 401
+    try:
+        # First try JSON body (Windows agent)
+        if request.is_json:
+            data = request.get_json()
+            logs = data.get("logs", [])
+        else:
+            # Legacy syslog fallback
+            if "syslog" in request.form:
+                logs = parse_syslog(request.form["syslog"])
+            else:
+                return jsonify({"error": "No logs received"}), 400
 
-    logs = request.get_json(silent=True)
+        if not isinstance(logs, list):
+            return jsonify({"error": "Logs must be a list"}), 400
 
-    if not logs and "pcap" in request.files:
-        logs = parse_pcap(request.files["pcap"])
+        # Ensure all logs are dictionaries
+        clean_logs = []
+        for l in logs:
+            if isinstance(l, str):
+                try:
+                    l = json.loads(l)
+                except:
+                    continue
+            clean_logs.append(l)
 
-    if not logs and request.form.get("syslog"):
-        logs = parse_syslog(request.form["syslog"])
+        if not clean_logs:
+            return jsonify({"error": "No valid logs"}), 400
 
-    if not logs:
-        return jsonify({"error": "No logs received"}), 400
+        result = run_detection_pipeline(clean_logs)
 
-    result = run_detection_pipeline(logs)
+        return jsonify({
+            "status": "success",
+            "client_id": request.headers.get("X-CLIENT-ID"),
+            "result": result
+        })
 
-    return jsonify({
-        "status": "success",
-        "client_id": cid,
-        "result": result
-    })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # =====================================================
 # RUN FLASK
